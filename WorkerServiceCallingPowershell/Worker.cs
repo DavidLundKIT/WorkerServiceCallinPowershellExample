@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using System.Management.Automation.Runspaces;
 
 namespace WorkerServiceCallingPowershell
 {
@@ -32,19 +33,26 @@ namespace WorkerServiceCallingPowershell
                     _logger.LogInformation("WSCP running at: {time}", DateTimeOffset.Now);
                 }
 
-                CallPowershellTask(1234, true);
+                await CallPowershellTask(1234, true);
                 await Task.Delay(1000, stoppingToken);
-                CallPowershellTask(1234, false);
+                await CallPowershellTask(1234, false);
                 _logger.LogInformation("WSCP sleeping for 20 sec. at: {time}", DateTimeOffset.Now);
                 await Task.Delay(20000, stoppingToken);
             }
         }
 
-        public bool CallPowershellTask(int companyID, bool asPath)
+        public async Task<bool> CallPowershellTask(int companyID, bool asPath)
         {
             try
             {
+                InitialSessionState iss = InitialSessionState.CreateDefault();
+                iss.ExecutionPolicy = Microsoft.PowerShell.ExecutionPolicy.Bypass;
+
+                Runspace runspace = RunspaceFactory.CreateRunspace(iss);
+                runspace.Open();
+
                 using PowerShell powershell = PowerShell.Create();
+                powershell.Runspace = runspace;
                 string script = @"C:\Work\psbin\see_quartr_apikeys.ps1";
 
                 if (!File.Exists(script))
@@ -65,8 +73,9 @@ namespace WorkerServiceCallingPowershell
                     powershell.AddScript(scriptSrc);
                 }
                 powershell.AddParameter("companyid", companyID);
-                var processes = powershell.Invoke();
+                var processes = await powershell.InvokeAsync();
 
+                bool result = powershell.HadErrors;
                 if (powershell.HadErrors)
                 {
                     _logger.LogError("Powershell error.");
@@ -77,11 +86,10 @@ namespace WorkerServiceCallingPowershell
                             _logger.LogError(errorRecord.Exception, errorRecord.Exception.Message);
                         }
                     }
-                    return false;
                 }
-
-                _logger.LogInformation("Powershell executed for company {id}, asPath: {asPath}", companyID, asPath);
-                return true;
+                runspace.Close();
+                _logger.LogInformation("Powershell executed for company {id}, asPath: {asPath}, result(hadErrors): {result}", companyID, asPath, result);
+                return result;
             }
             catch (Exception ex)
             {
